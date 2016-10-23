@@ -1,0 +1,477 @@
+<html>
+
+<head>
+<title>Mali-400 blend bug</title>
+
+<script id="fshader" type="x-shader/x-fragment">
+precision mediump float;
+// =========================================================================
+//                                   VARYINGS
+// =========================================================================
+varying vec3 v_position;
+
+// =========================================================================
+//                                   UNIFORMS
+// =========================================================================
+uniform float u_alpha;
+
+// =========================================================================
+//                                   MAIN
+// =========================================================================
+void main(void) {
+    gl_FragColor = vec4(v_position, u_alpha);
+}
+</script>
+
+<script id="vshader" type="x-shader/x-vertex">
+// =========================================================================
+//                                   ATTRIBUTES
+// =========================================================================
+attribute vec3 a_position;
+
+// =========================================================================
+//                                   VARYINGS
+// =====================3====================================================
+varying vec3 v_position;
+
+// =========================================================================
+//                                   UNIFORMS
+// =========================================================================
+uniform mat4 u_view_matrix;
+uniform mat4 u_proj_matrix;
+uniform mat4 u_model_matrix;
+
+// =========================================================================
+//                                   MAIN
+// =========================================================================
+void main(void) {
+    gl_Position = u_proj_matrix * u_view_matrix * u_model_matrix * vec4(a_position, 1.0);
+    v_position = a_position;
+}
+</script>
+
+
+<script type="text/javascript">
+    "use strict";
+
+    var gl;
+    var canvas;
+    var CONTEXT_PARAMS = {
+        alpha              : false,
+        antialias          : false,
+        premultipliedAlpha : false
+    };
+
+    function init_context(canvas) {
+        canvas = document.getElementById("canvas3d");
+        var names = ["experimental-webgl", "webgl", "webkit-3d", "moz-webgl"];
+        for (var ii = 0; ii < names.length; ++ii) {
+            try {
+                gl = canvas.getContext(names[ii], CONTEXT_PARAMS);
+            } catch(e) {}
+            if (gl) {
+                break;
+            }
+        }
+
+        if (!gl) {
+            alert("failed to get webgl context");
+        }
+    }
+
+    var program;
+    function init_program() {
+        var vshader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vshader, document.getElementById("vshader").innerHTML);
+
+        gl.compileShader(vshader);
+
+        if (!gl.getShaderParameter(vshader, gl.COMPILE_STATUS))
+            throw Error("failed to compile vertex shader: " +
+                gl.getShaderInfoLog(vshader));
+
+        var fshader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fshader, document.getElementById("fshader").innerHTML);
+        gl.compileShader(fshader);
+
+        if (!gl.getShaderParameter(fshader, gl.COMPILE_STATUS))
+            throw Error("failed to compile fragment shader: " +
+                gl.getShaderInfoLog(fshader));
+
+        program = gl.createProgram();
+        gl.attachShader(program, vshader);
+        gl.attachShader(program, fshader);
+        gl.linkProgram(program);
+
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+        gl.useProgram(program);
+        program.position_attribute = gl.getAttribLocation(program, "a_position");
+        gl.enableVertexAttribArray(program.position_attribute);
+
+        program.alpha_uniform = gl.getUniformLocation(program, "u_alpha");
+        program.sampler_uniform = gl.getUniformLocation(program, "u_sampler");
+        program.proj_matrix_uniform = gl.getUniformLocation(program, "u_proj_matrix");
+        program.view_matrix_uniform = gl.getUniformLocation(program, "u_view_matrix");
+        program.model_matrix_uniform = gl.getUniformLocation(program, "u_model_matrix");
+    }
+
+    function init_uniforms() {
+        var proj_matrix = new Float32Array(16);
+        var aspect = gl.drawingBufferWidth / gl.drawingBufferHeight;
+        mat4_perspective(90.0, aspect, 0.1, 100.0, proj_matrix);
+        gl.uniformMatrix4fv(program.proj_matrix_uniform, false, proj_matrix);
+    }
+
+    // =========================================================================
+    //                                   GL_MATRIX START
+    // =========================================================================
+    var GLMAT_EPSILON = 0.0000001;
+    function mat4_perspective(fovy, aspect, near, far, out) {
+        var f = 1.0 / Math.tan(fovy / 2),
+            nf = 1 / (near - far);
+        out[0] = f / aspect;
+        out[1] = 0;
+        out[2] = 0;
+        out[3] = 0;
+        out[4] = 0;
+        out[5] = f;
+        out[6] = 0;
+        out[7] = 0;
+        out[8] = 0;
+        out[9] = 0;
+        out[10] = (far + near) * nf;
+        out[11] = -1;
+        out[12] = 0;
+        out[13] = 0;
+        out[14] = (2 * far * near) * nf;
+        out[15] = 0;
+        return out;
+    }
+
+    function mat4_identity(out) {
+        out[0] = out[5] = out[10] = out[15] = 1;
+        out[1] = out[2] = out[3] = out[4] = out[6] = out[7] = out[8] = out[9] =
+                out[11] = out[12] = out[13] = out[14] = 0;
+        return out;
+    }
+
+    function mat4_translate(a, v, out) {
+        var x = v[0], y = v[1], z = v[2],
+            a00, a01, a02, a03,
+            a10, a11, a12, a13,
+            a20, a21, a22, a23;
+
+        if (a === out) {
+            out[12] = a[0] * x + a[4] * y + a[8] * z + a[12];
+            out[13] = a[1] * x + a[5] * y + a[9] * z + a[13];
+            out[14] = a[2] * x + a[6] * y + a[10] * z + a[14];
+            out[15] = a[3] * x + a[7] * y + a[11] * z + a[15];
+        } else {
+            a00 = a[0]; a01 = a[1]; a02 = a[2]; a03 = a[3];
+            a10 = a[4]; a11 = a[5]; a12 = a[6]; a13 = a[7];
+            a20 = a[8]; a21 = a[9]; a22 = a[10]; a23 = a[11];
+
+            out[0] = a00; out[1] = a01; out[2] = a02; out[3] = a03;
+            out[4] = a10; out[5] = a11; out[6] = a12; out[7] = a13;
+            out[8] = a20; out[9] = a21; out[10] = a22; out[11] = a23;
+
+            out[12] = a00 * x + a10 * y + a20 * z + a[12];
+            out[13] = a01 * x + a11 * y + a21 * z + a[13];
+            out[14] = a02 * x + a12 * y + a22 * z + a[14];
+            out[15] = a03 * x + a13 * y + a23 * z + a[15];
+        }
+
+        return out;
+    }
+
+    function mat4_rotate(a, rad, axis, out) {
+        var x = axis[0], y = axis[1], z = axis[2],
+            len = Math.sqrt(x * x + y * y + z * z),
+            s, c, t,
+            a00, a01, a02, a03,
+            a10, a11, a12, a13,
+            a20, a21, a22, a23,
+            b00, b01, b02,
+            b10, b11, b12,
+            b20, b21, b22;
+
+        if (Math.abs(len) < GLMAT_EPSILON) { return null; }
+
+        len = 1 / len;
+        x *= len;
+        y *= len;
+        z *= len;
+
+        s = Math.sin(rad);
+        c = Math.cos(rad);
+        t = 1 - c;
+
+        a00 = a[0]; a01 = a[1]; a02 = a[2]; a03 = a[3];
+        a10 = a[4]; a11 = a[5]; a12 = a[6]; a13 = a[7];
+        a20 = a[8]; a21 = a[9]; a22 = a[10]; a23 = a[11];
+
+        // Construct the elements of the rotation matrix
+        b00 = x * x * t + c; b01 = y * x * t + z * s; b02 = z * x * t - y * s;
+        b10 = x * y * t - z * s; b11 = y * y * t + c; b12 = z * y * t + x * s;
+        b20 = x * z * t + y * s; b21 = y * z * t - x * s; b22 = z * z * t + c;
+
+        // Perform rotation-specific matrix multiplication
+        out[0] = a00 * b00 + a10 * b01 + a20 * b02;
+        out[1] = a01 * b00 + a11 * b01 + a21 * b02;
+        out[2] = a02 * b00 + a12 * b01 + a22 * b02;
+        out[3] = a03 * b00 + a13 * b01 + a23 * b02;
+        out[4] = a00 * b10 + a10 * b11 + a20 * b12;
+        out[5] = a01 * b10 + a11 * b11 + a21 * b12;
+        out[6] = a02 * b10 + a12 * b11 + a22 * b12;
+        out[7] = a03 * b10 + a13 * b11 + a23 * b12;
+        out[8] = a00 * b20 + a10 * b21 + a20 * b22;
+        out[9] = a01 * b20 + a11 * b21 + a21 * b22;
+        out[10] = a02 * b20 + a12 * b21 + a22 * b22;
+        out[11] = a03 * b20 + a13 * b21 + a23 * b22;
+
+        if (a !== out) {
+            out[12] = a[12];
+            out[13] = a[13];
+            out[14] = a[14];
+            out[15] = a[15];
+        }
+        return out;
+    }
+    // =========================================================================
+    //                                   GL_MATRIX END
+    // =========================================================================
+
+    function deg_to_rad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    var Cube = function() {
+        this.model_matrix = new Float32Array(16);
+
+        this.translation = new Float32Array(3);
+
+        this.rotation = new Float32Array(3);
+        this.rotation_speed = new Float32Array(3);
+
+        this.blending = false;
+        this.changeable_alpha = false;
+        this.alpha = 0.3;
+
+        this.pos_vbo = gl.createBuffer();
+        this.vbi = gl.createBuffer();
+
+        var self = this;
+        this.init = function() {
+            gl.bindBuffer(gl.ARRAY_BUFFER, self.pos_vbo);
+            var vertices = [
+                -1.0, -1.0, 1.0,
+                1.0, -1.0, 1.0,
+                1.0, 1.0, 1.0,
+                -1.0, 1.0, 1.0,
+                -1.0, 1.0, -1.0,
+                1.0, 1.0, -1.0,
+                1.0, -1.0, -1.0,
+                -1.0, -1.0, -1.0
+            ];
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+            self.pos_vbo.size = 3;
+            self.pos_vbo.count = 8;
+
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.vbi);
+            var indices = [
+                0, 1, 2, 0, 2, 3, // Front
+                4, 5, 6, 4, 6, 7, // Back
+                2, 5, 4, 2, 4, 3, // Top
+                0, 7, 6, 0, 6, 1, // Bottom
+                1, 6, 5, 1, 5, 2, // Right
+                0, 3, 4, 0, 4, 7  // Left
+            ];
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+            self.vbi.size = 1;
+            self.vbi.count = 36;
+        };
+
+        this.render = function() {
+            gl.bindBuffer(gl.ARRAY_BUFFER, self.pos_vbo);
+            gl.vertexAttribPointer(program.position_attribute, self.pos_vbo.size, gl.FLOAT, false, 0, 0);
+
+            if (self.blending) {
+                gl.enable(gl.BLEND);
+                gl.depthMask(false);
+                if (self.changeable_alpha) {
+                    gl.uniform1f(program.alpha_uniform, parseFloat(document.getElementById("alpha").value) || 1.0);
+                } else {
+                    gl.uniform1f(program.alpha_uniform, self.alpha);
+                }
+            } else {
+                gl.disable(gl.BLEND);
+                gl.depthMask(true);
+            }
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.vbi);
+
+            gl.uniformMatrix4fv(program.model_matrix_uniform, false, self.model_matrix);
+            gl.drawElements(gl.TRIANGLES, self.vbi.count, gl.UNSIGNED_SHORT, 0);
+        };
+
+        var _vec3_tmp = new Float32Array(3);
+        this.animate = (function() {
+            return function(elapsed) {
+                mat4_identity(self.model_matrix);
+
+                for (var i = 0; i < 3; ++i) {
+                    self.rotation[i] += self.rotation_speed[i] * elapsed / 1000;
+                    _vec3_tmp[0] = _vec3_tmp[1] = _vec3_tmp[2] = 0;
+                    _vec3_tmp[i] = 1;
+                    mat4_rotate(self.model_matrix, deg_to_rad(self.rotation[i]), _vec3_tmp, self.model_matrix);
+                }
+                mat4_translate(self.model_matrix, self.translation, self.model_matrix);
+            }
+        })();
+    };
+
+    var Camera = function() {
+        this.view_matrix = new Float32Array(16);
+
+        this.rotation = new Float32Array(3);
+        this.translation = new Float32Array(3);
+        // z coordinate
+        this.translation[2] = -5;
+
+        this.rotation_speed = new Float32Array(3);
+
+        this.pressed_keys = {};
+
+        var self = this;
+        this.registrate_handlers = function() {
+            document.addEventListener("keydown", function(event) {
+                self.pressed_keys[event.keyCode] = true;
+            });
+            document.addEventListener("keyup", function(event) {
+                self.pressed_keys[event.keyCode] = false;
+            });
+        };
+
+        var _vec3_tmp = new Float32Array(3);
+        this.update = function(elapsed) {
+            if (self.pressed_keys[38] || self.pressed_keys[87]) {
+                self.rotation_speed[0] += 1;
+            }
+            if (self.pressed_keys[40] || self.pressed_keys[83]) {
+                self.rotation_speed[0] -= 1;
+            }
+            if (self.pressed_keys[37] || self.pressed_keys[65]) {
+                self.rotation_speed[1] += 1;
+            }
+            if (self.pressed_keys[39] || self.pressed_keys[68]) {
+                self.rotation_speed[1] -= 1;
+            }
+
+            mat4_identity(self.view_matrix);
+            mat4_translate(self.view_matrix, self.translation, self.view_matrix);
+            for (var i = 0; i < 3; ++i) {
+                self.rotation[i] += self.rotation_speed[i] * elapsed / 1000;
+                _vec3_tmp[0] = _vec3_tmp[1] = _vec3_tmp[2] = 0;
+                _vec3_tmp[i] = 1;
+                mat4_rotate(self.view_matrix, deg_to_rad(self.rotation[i]), _vec3_tmp, self.view_matrix);
+            }
+
+            gl.uniformMatrix4fv(program.view_matrix_uniform, false, self.view_matrix);
+        };
+    };
+
+    var cubes = [];
+    var camera = null;
+    function draw() {
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        for (var i = 0; i < cubes.length; i++) {
+            cubes[i].render();
+        }
+    }
+
+    var lastTime = 0;
+
+    var animate = (function() {
+        var time_now = 0;
+        var time_last = 0;
+        var elapsed = 0;
+        var i = 0;
+
+        return function() {
+            time_now = new Date().getTime();
+            if (time_last != 0) {
+                elapsed = time_now - time_last;
+            }
+            time_last = time_now;
+
+            camera.update(elapsed);
+
+            for (i = 0; i < cubes.length; i++) {
+                cubes[i].animate(elapsed);
+            }
+        }
+    })();
+
+    var requestAnimFrame = (function() {
+        return window.requestAnimationFrame ||
+            window.webkitRequestAnimationFrame ||
+            window.mozRequestAnimationFrame ||
+            window.oRequestAnimationFrame ||
+            window.msRequestAnimationFrame ||
+            function(callback) {
+                return window.setTimeout(callback, 1000 / 60);
+            };
+    })();
+
+    function tick() {
+        requestAnimFrame(tick);
+
+        animate();
+
+        draw();
+    }
+
+    function run() {
+        init_context();
+
+        init_program();
+
+        init_uniforms();
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        gl.enable(gl.DEPTH_TEST);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+        var first_cube = new Cube();
+        first_cube.init();
+        first_cube.rotation_speed[1] = -10;
+        first_cube.translation[2] = 0;
+        cubes.push(first_cube);
+
+        var second_cube = new Cube();
+        second_cube.init();
+        second_cube.rotation_speed[1] = 30;
+        second_cube.translation[2] = 2.5;
+        second_cube.blending = true;
+        second_cube.changeable_alpha = true;
+        cubes.push(second_cube);
+
+        camera = new Camera();
+        camera.registrate_handlers();
+
+        requestAnimFrame(tick);
+    }
+</script>
+</head>
+
+<body onload="run();">
+    <canvas id="canvas3d" width=1000 height=500 style="position:relative; width:1000px; height:500px;"></canvas>
+    <br>
+    <label for="alpha">Alpha: </label><input id="alpha" type="number" min="0" max="1" step="0.05" value="0.3" /><br/>
+</body>
+
+</html>
